@@ -62,19 +62,30 @@ def _fit_spode(
     bernoulli_features=None,
     gaussian_features=None,
     var_prior_weight=0.0,
+    n_classes=None,
+    X_int=None,
+    n_categories=None,
 ):
     """Fits a single SPODE (Sub-model) in parallel.
 
     Uses integer-based Y* encoding for speed and robustness.
     Y* = class_idx * n_parent_combos + parent_linear_index
 
+    ``y`` holds class indices (0..n_classes-1), ``X_int`` an optional
+    integer copy of ``X`` for the categorical counts and ``n_categories`` the
+    number of categories of each of its columns; all are computed once by the
+    ensemble rather than once per component.
+
     The augmented-class prior P(Y*) is Laplace-smoothed over the *full*
     grid of augmented states (classes x parent combinations), so that
     states never observed in training keep a finite, smoothed probability.
     """
-    unique_y = np.unique(y)
-    y_int = np.searchsorted(unique_y, y)
-    n_classes = len(unique_y)
+    if n_classes is None:  # raw labels
+        unique_y = np.unique(y)
+        y_int = np.searchsorted(unique_y, y)
+        n_classes = len(unique_y)
+    else:
+        y_int = y
 
     # A. Compute integer Y*
     if len(parent_indices) > 0:
@@ -94,10 +105,11 @@ def _fit_spode(
     # B. Identify child features
     child_indices = [i for i in range(n_features) if i not in parent_indices]
 
+    # The component's model works on the child columns of X, read in place
     if not child_indices:
-        X_train_sub = np.zeros((X.shape[0], 1))
+        X_fit, X_int_fit, columns = np.zeros((X.shape[0], 1)), None, None
     else:
-        X_train_sub = X[:, child_indices]
+        X_fit, X_int_fit, columns = X, X_int, child_indices
 
     # Map global feature indices to local sub-indices
     global_to_sub = {g_idx: s_idx for s_idx, g_idx in enumerate(child_indices)}
@@ -118,13 +130,21 @@ def _fit_spode(
         gaussian_features=_to_sub(gaussian_features),
         var_prior_weight=var_prior_weight if has_parents else 0.0,
     )
-    sub_model.fit(X_train_sub, y_star)
+    ystar_classes, ystar_idx = np.unique(y_star, return_inverse=True)
+    sub_model._fit_encoded(
+        X_fit,
+        ystar_idx,
+        ystar_classes,
+        X_int=X_int_fit,
+        columns=columns,
+        n_categories=n_categories if columns is not None else None,
+    )
+    counts = np.bincount(ystar_idx, minlength=len(ystar_classes))
 
     # D. Laplace-smoothed augmented prior over the full grid of Y* states.
     n_total = len(y)
     n_states = n_classes * n_combos
     if has_parents:
-        counts = np.bincount(np.searchsorted(sub_model.classes_, y_star))
         denom = n_total + alpha * n_states
         sub_model.class_log_prior_ = np.log((counts + alpha) / denom)
         log_prior_unseen = np.log(alpha / denom) if alpha > 0 else -np.inf
@@ -132,8 +152,10 @@ def _fit_spode(
         log_prior_unseen = -np.inf
 
     # E. Observed parent instantiations and their frequencies (for the
-    #    minimum-frequency rule that decides whether a SPODE is used).
-    obs_parent_keys, obs_parent_counts = np.unique(parent_keys, return_counts=True)
+    #    minimum-frequency rule that decides whether a SPODE is used),
+    #    aggregated from the augmented states instead of re-sorting the data.
+    obs_parent_keys, inv = np.unique(ystar_classes % n_combos, return_inverse=True)
+    obs_parent_counts = np.bincount(inv, weights=counts).astype(np.int64)
 
     return {
         "parent_indices": parent_indices,
@@ -359,6 +381,14 @@ class _BaseAnDE(ClassifierMixin, BaseEstimator):
         if self.n_dependence == 0:
             parent_combinations = [()]
 
+        # Work shared by every component, computed once: class indices, the
+        # feature types detected by the back-off model, and integer codes of
+        # the categorical attributes.
+        y_int = np.searchsorted(self.classes_, y)
+        types = self.backoff_.feature_types_
+        X_int = X.astype(np.int64) if types["categorical"] else None
+        n_categories = None if X_int is None else X_int.max(axis=0) + 1
+
         # Use joblib to fit SPODEs in parallel
         # Disabling memory mapping (max_nbytes=None, mmap_mode=None) prevents joblib from writing temporary files to disk.
         self.ensemble_ = Parallel(
@@ -369,15 +399,18 @@ class _BaseAnDE(ClassifierMixin, BaseEstimator):
             delayed(_fit_spode)(
                 p_idx,
                 X,
-                y,
+                y_int,
                 self._parent_data,
                 self.n_features_in_,
                 self.alpha,
                 self._parent_cards,
-                self.categorical_features,
-                self.bernoulli_features,
-                self.gaussian_features,
+                types["categorical"],
+                types["bernoulli"],
+                types["gaussian"],
                 self.var_prior_weight,
+                len(self.classes_),
+                X_int,
+                n_categories,
             )
             for p_idx in parent_combinations
         )

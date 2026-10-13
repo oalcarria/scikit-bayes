@@ -75,6 +75,29 @@ def _fit_categorical_nb(X, y_idx, classes, alpha, n_categories):
     return est
 
 
+def _fit_bernoulli_nb(X_bool, y_idx, classes, alpha):
+    """BernoulliNB with the estimates of ``BernoulliNB.fit``, without the dense
+    one-hot label matrix that sklearn builds (n_samples x n_classes)."""
+    n_classes = len(classes)
+    class_count = np.bincount(y_idx, minlength=n_classes).astype(np.float64)
+    feature_count = np.column_stack(
+        [
+            np.bincount(y_idx, weights=X_bool[:, j], minlength=n_classes)
+            for j in range(X_bool.shape[1])
+        ]
+    )
+    est = BernoulliNB(alpha=alpha)
+    est.classes_ = classes
+    est.class_count_ = class_count
+    est.feature_count_ = feature_count
+    est.feature_log_prob_ = np.log(feature_count + alpha) - np.log(
+        class_count[:, np.newaxis] + 2 * alpha
+    )
+    est.class_log_prior_ = np.log(class_count) - np.log(class_count.sum())
+    est.n_features_in_ = X_bool.shape[1]
+    return est
+
+
 class MixedNB(ClassifierMixin, BaseEstimator):
     """
     Mixed Naive Bayes classifier for heterogeneous data.
@@ -226,7 +249,31 @@ class MixedNB(ClassifierMixin, BaseEstimator):
             Returns the instance itself.
         """
         X, y = validate_data(self, X, y)
-        self.classes_ = unique_labels(y)
+        classes = unique_labels(y)
+        return self._fit_encoded(X, np.searchsorted(classes, y), classes)
+
+    def _fit_encoded(
+        self, X, y_idx, classes, X_int=None, columns=None, n_categories=None
+    ):
+        """Fit on a validated ``X`` with labels given as indices into ``classes``.
+
+        AnDE fits one MixedNB per component on data it has already validated and
+        encoded; this entry point skips the repeated validation and label
+        encoding. ``X_int`` is an optional integer copy of ``X`` used for the
+        categorical counts. When ``columns`` is given, the model is fitted on
+        ``X[:, columns]`` (feature indices refer to positions in ``columns``)
+        without materialising that submatrix. ``n_categories`` optionally gives
+        the number of categories of every column of ``X`` (max + 1).
+        """
+        if columns is None:
+            columns = np.arange(X.shape[1])
+        columns = np.asarray(columns)
+
+        def cols(local):
+            return columns[np.asarray(local, dtype=int)]
+
+        self.classes_ = classes
+        self.n_features_in_ = len(columns)
 
         # --- Parameter and Feature Type Validation ---
         cat_feats = self._validate_feature_indices(
@@ -259,7 +306,7 @@ class MixedNB(ClassifierMixin, BaseEstimator):
             if i in user_defined_indices:
                 continue
 
-            feature_col = X[:, i]
+            feature_col = X[:, columns[i]]
             unique_vals = np.unique(feature_col)
 
             # Check if float column essentially contains integers
@@ -284,27 +331,30 @@ class MixedNB(ClassifierMixin, BaseEstimator):
 
         # --- Fit Sub-estimators ---
         self.estimators_ = {}
-        y_idx = np.searchsorted(self.classes_, y)
 
         if self.feature_types_["gaussian"]:
-            indices = self.feature_types_["gaussian"]
+            X_gauss = X[:, cols(self.feature_types_["gaussian"])]
             gauss_nb = _fit_gaussian_nb(
-                X[:, indices], y_idx, self.classes_, self.var_smoothing
+                X_gauss, y_idx, self.classes_, self.var_smoothing
             )
             if self.var_prior_weight > 0:
                 # Shrink class-conditional variances towards the pooled
                 # variance (normal-inverse-gamma style pseudo-observations).
-                pooled_var = np.var(X[:, indices], axis=0) + gauss_nb.epsilon_
+                pooled_var = np.var(X_gauss, axis=0) + gauss_nb.epsilon_
                 n_c = gauss_nb.class_count_[:, np.newaxis]
                 nu = self.var_prior_weight
                 gauss_nb.var_ = (n_c * gauss_nb.var_ + nu * pooled_var) / (n_c + nu)
             self.estimators_["gaussian"] = gauss_nb
 
         if self.feature_types_["categorical"]:
-            indices = self.feature_types_["categorical"]
-            min_cats = self._get_min_categories(X[:, indices])
+            g = cols(self.feature_types_["categorical"])
+            X_cat = X[:, g].astype(np.int64) if X_int is None else X_int[:, g]
+            if n_categories is None:
+                min_cats = self._get_min_categories(X_cat)
+            else:
+                min_cats = np.asarray(n_categories, dtype=int)[g]
             cat_nb = _fit_categorical_nb(
-                X[:, indices].astype(np.int64),
+                X_cat,
                 y_idx,
                 self.classes_,
                 self.alpha,
@@ -315,10 +365,10 @@ class MixedNB(ClassifierMixin, BaseEstimator):
             self._cat_cardinalities = np.array(min_cats, dtype=int)
 
         if self.feature_types_["bernoulli"]:
-            indices = self.feature_types_["bernoulli"]
-            bern_nb = BernoulliNB(alpha=self.alpha)
-            bern_nb.fit(X[:, indices] > 0, y)
-            self.estimators_["bernoulli"] = bern_nb
+            g = cols(self.feature_types_["bernoulli"])
+            self.estimators_["bernoulli"] = _fit_bernoulli_nb(
+                X[:, g] > 0, y_idx, self.classes_, self.alpha
+            )
 
         class_counts = np.bincount(y_idx, minlength=len(self.classes_))
         self.class_log_prior_ = np.log(class_counts / class_counts.sum())
