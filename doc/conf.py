@@ -113,4 +113,13 @@ sphinx_gallery_conf = {
     "reference_url": {"skbn": None},
     "run_stale_examples": False,
     "filename_pattern": "plot_",
+    # One section per folder, in this order; examples sorted by file name
+    "subsection_order": [
+        "../examples/mixednb",
+        "../examples/ande",
+        "../examples/hybrid",
+        "../examples/discretization",
+        "../examples/integration",
+    ],
+    "within_subsection_order": "FileNameSortKey",
 }

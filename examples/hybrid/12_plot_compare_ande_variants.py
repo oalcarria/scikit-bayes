@@ -6,6 +6,7 @@ Data Efficiency & Complexity: Generative vs. Hybrid Levels (L1-L4)
 This experiment compares the full hierarchy of parameter granularity in ALR.
 
 **Models Compared:**
+
 1.  **AnDE (Generative):** Baseline. No weights.
 2.  **ALR Level 1 (Model):** 1 weight per SPODE. (Low Variance).
 3.  **ALR Level 2 (Value):** 1 weight per SPODE per Parent Value. (High Variance).
@@ -13,10 +14,14 @@ This experiment compares the full hierarchy of parameter granularity in ALR.
 5.  **ALR Level 4 (Val+Cls):** 1 weight per SPODE per Parent Value per Class. (Max Variance).
 
 **Observations:**
--   **Small N (~200):** AnDE (Generative) leads due to better calibration. Hybrids may overfit.
--   **Medium N (~500):** ALR (Hybrid) catches up.
--   **Large N (>5000):** Higher granularity wins. Order: L1 < L2 < L3 < L4.
--   **Time:** L4 is significantly slower due to larger optimization space.
+
+-   **Small N (100):** AnDE (Generative) leads by a wide margin. With a weak
+    penalty the hybrids overfit, the more so the more weights they have.
+-   **Medium N (~1000):** The hybrids catch up with AnDE.
+-   **Large N (>=5000):** The finest granularity (L4) is clearly the best in
+    log loss and accuracy; L2 and L3 follow and L1 barely improves on AnDE.
+-   **Time:** Every model trains in at most a couple of seconds. The cost
+    grows with the number of weights, so L4 is the slowest.
 """
 
 # Author: The scikit-bayes Developers
@@ -39,22 +44,22 @@ seeds = [1, 2, 3, 42, 123]
 sizes = [100, 500, 1000, 5000, 10000, 20000]
 
 models_config = [
-    ("AnDE (Gen)", lambda: AnDE(n_dependence=1, n_jobs=-1)),
+    ("AnDE (Gen)", lambda: AnDE(n_dependence=1)),
     (
         "ALR L1 (Model)",
-        lambda: ALR(n_dependence=1, weight_level=1, l2_reg=1e-3, n_jobs=-1),
+        lambda: ALR(n_dependence=1, weight_level=1, l2_reg=1e-3),
     ),
     (
         "ALR L2 (Value)",
-        lambda: ALR(n_dependence=1, weight_level=2, l2_reg=1e-3, n_jobs=-1),
+        lambda: ALR(n_dependence=1, weight_level=2, l2_reg=1e-3),
     ),
     (
         "ALR L3 (Class)",
-        lambda: ALR(n_dependence=1, weight_level=3, l2_reg=1e-3, n_jobs=-1),
+        lambda: ALR(n_dependence=1, weight_level=3, l2_reg=1e-3),
     ),
     (
         "ALR L4 (Val+Cls)",
-        lambda: ALR(n_dependence=1, weight_level=4, l2_reg=1e-3, n_jobs=-1),
+        lambda: ALR(n_dependence=1, weight_level=4, l2_reg=1e-3),
     ),
 ]
 
