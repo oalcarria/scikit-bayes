@@ -9958,8 +9958,8 @@ packages:
   timestamp: 1714090270741
 - pypi: ./
   name: scikit-bayes
-  version: 1.1.1.dev4+g8fb77adf5.d20261001
-  sha256: 41178227ce791bd5ee790c5b82684e890814118092026aa81f89a5ab4087d513
+  version: 1.2.2.dev2+g4d1c2c826
+  sha256: 3aa63c788c90c5eb04531462cb2590c0922a8aacc79e2d5488104ec5fd01c929
   requires_dist:
   - numpy
   - scipy
