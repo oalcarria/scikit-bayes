@@ -46,6 +46,19 @@ Averaged n-Join Estimators and Accelerated Logistic Regression.
    AnJE
    ALR
 
+.. _tan_api:
+
+Tree Augmented Naive Bayes
+--------------------------
+
+Naive Bayes extended with a tree of dependencies between the attributes.
+
+.. autosummary::
+   :toctree: generated/
+   :template: class.rst
+
+   TAN
+
 
 Utilities
 =========
