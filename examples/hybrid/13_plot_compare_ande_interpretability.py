@@ -68,7 +68,8 @@ features = [f"F{i}\n(Signal)" if i < 2 else f"F{i}\n(Noise)" for i in range(n_fe
 indices = np.arange(n_features)
 
 ande_weights = np.ones(n_features)
-wande_weights = wande.learned_weights_  # one weight per SPODE (weight_level=1)
+# One weight per SPODE (weight_level=1); the last one is shared by unseen states
+wande_weights = wande.learned_weights_[:n_features]
 
 fig, axes = plt.subplots(1, 2, figsize=(16, 7), sharey=True)
 
