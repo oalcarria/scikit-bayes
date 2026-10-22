@@ -83,3 +83,4 @@ experiments/calibration/
 
 instructions.py
 .bat
+*.bat
