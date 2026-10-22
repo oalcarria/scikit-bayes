@@ -1,4 +1,5 @@
-"""Extended tests for skbn.ande module - AnJE, ALR, WeightedAnDE, and edge cases."""
+"""Extended tests for the AnDE and AnJE families: weighted variants, edge
+cases, parallel execution and API consistency."""
 
 # Authors: scikit-bayes developers
 # SPDX-License-Identifier: BSD-3-Clause
@@ -8,7 +9,7 @@ import pytest
 from numpy.testing import assert_allclose, assert_array_equal
 from sklearn.datasets import make_classification
 
-from skbn.ande import ALR, AnDE, AnJE, WeightedAnDE
+from skbn import ALR, AnDE, AnJE, WeightedAnDE
 
 # =============================================================================
 # Synthetic Datasets
@@ -28,300 +29,117 @@ y_CAT = np.array([0, 1, 1, 0, 0, 1, 1, 0])
 X_GAUSS = np.array([[-1.0, -1.0], [-1.0, 1.0], [1.0, -1.0], [1.0, 1.0]])
 y_GAUSS = np.array([0, 1, 1, 0])
 
+# One configuration of every estimator, with a short optimization
+MODELS = {
+    "AnDE": lambda: AnDE(n_dependence=1),
+    "AnDE-geometric": lambda: AnDE(n_dependence=1, mean="geometric"),
+    "WeightedAnDE": lambda: WeightedAnDE(n_dependence=1, max_iter=10),
+    "WeightedAnDE-factor": lambda: WeightedAnDE(
+        n_dependence=1, weight_scope="factor", weight_level=4, max_iter=10
+    ),
+    "AnJE": lambda: AnJE(n_join=2),
+    "ALR": lambda: ALR(n_join=2, max_iter=10),
+}
+
 
 # =============================================================================
-# AnJE Tests (Geometric Mean)
+# Geometric pooling of SPnDEs
 # =============================================================================
 
 
-class TestAnJE:
-    """Tests for the AnJE (Geometric Mean) classifier."""
+class TestGeometricAnDE:
+    """Tests for AnDE with geometric pooling of its components."""
 
-    def test_anje_basic_fit_predict(self):
-        """Test that AnJE can fit and predict without errors."""
-        model = AnJE(n_dependence=1, n_bins=3)
-        model.fit(X_MIXED, y_MIXED)
-
-        preds = model.predict(X_MIXED)
-        assert set(preds).issubset(set(y_MIXED))
-
-    def test_anje_n0_runs(self):
-        """Test AnJE with n=0 (equivalent to Naive Bayes structure)."""
-        model = AnJE(n_dependence=0)
-        model.fit(X_MIXED, y_MIXED)
-
-        preds = model.predict(X_MIXED)
-        assert len(preds) == len(y_MIXED)
-
-    def test_anje_probabilities_sum_to_one(self):
-        """Test that predict_proba returns valid probabilities."""
-        model = AnJE(n_dependence=1)
-        model.fit(X_MIXED, y_MIXED)
-
+    def test_probabilities_sum_to_one(self):
+        model = AnDE(n_dependence=1, mean="geometric").fit(X_MIXED, y_MIXED)
         proba = model.predict_proba(X_MIXED)
-        # Probabilities should sum to 1 for each sample
         assert_allclose(proba.sum(axis=1), 1.0, rtol=1e-5)
-        # All probabilities should be non-negative
         assert np.all(proba >= 0)
 
-    def test_anje_log_proba_consistency(self):
-        """Test that predict_log_proba is consistent with predict_proba."""
-        model = AnJE(n_dependence=1)
-        model.fit(X_MIXED, y_MIXED)
+    def test_n0_is_naive_bayes_like_arithmetic(self):
+        # A single component: both means pool the same joint
+        geo = AnDE(n_dependence=0, mean="geometric").fit(X_MIXED, y_MIXED)
+        ari = AnDE(n_dependence=0).fit(X_MIXED, y_MIXED)
+        assert_allclose(geo.predict_proba(X_MIXED), ari.predict_proba(X_MIXED))
 
-        log_proba = model.predict_log_proba(X_MIXED)
-        proba = model.predict_proba(X_MIXED)
-
-        assert_allclose(np.exp(log_proba), proba, rtol=1e-5)
-
-    def test_anje_categorical_xor(self):
-        """Test AnJE on categorical XOR problem."""
-        model = AnJE(n_dependence=1)
-        model.fit(X_CAT, y_CAT)
-
+    def test_categorical_xor(self):
+        model = AnDE(n_dependence=1, mean="geometric").fit(X_CAT, y_CAT)
         X_test = np.array([[0, 0], [0, 1], [1, 0], [1, 1]])
-        expected_y = np.array([0, 1, 1, 0])
-        preds = model.predict(X_test)
+        assert_array_equal(model.predict(X_test), [0, 1, 1, 0])
 
-        assert_array_equal(preds, expected_y, err_msg="AnJE failed categorical XOR")
+    def test_gaussian_xor(self):
+        model = AnDE(n_dependence=1, n_bins=2, mean="geometric")
+        assert_array_equal(model.fit(X_GAUSS, y_GAUSS).predict(X_GAUSS), y_GAUSS)
 
-    def test_anje_gaussian_xor(self):
-        """Test AnJE on Gaussian XOR problem."""
-        model = AnJE(n_dependence=1, n_bins=2, strategy="quantile")
-        model.fit(X_GAUSS, y_GAUSS)
-
-        preds = model.predict(X_GAUSS)
-        assert_array_equal(preds, y_GAUSS, err_msg="AnJE failed Gaussian XOR")
-
-    def test_anje_n2_structure(self):
-        """Test AnJE(n=2) builds correct number of models."""
-        model = AnJE(n_dependence=2)
-        model.fit(X_MIXED, y_MIXED)
-
-        # 3 features, n=2 -> C(3,2) = 3 models
-        assert len(model.ensemble_) == 3
-
-    def test_anje_vs_ande_different_aggregation(self):
-        """Test that AnJE (geometric mean) differs from AnDE (arithmetic mean)."""
-        anje = AnJE(n_dependence=1)
-        ande = AnDE(n_dependence=1)
-
-        anje.fit(X_MIXED, y_MIXED)
-        ande.fit(X_MIXED, y_MIXED)
-
-        proba_anje = anje.predict_proba(X_MIXED)
-        proba_ande = ande.predict_proba(X_MIXED)
-
-        # Probabilities should generally differ (geometric vs arithmetic mean)
-        # Although predictions may match, probabilities should typically differ
-        # This is a sanity check that they're not identical implementations
-        assert proba_anje.shape == proba_ande.shape
+    def test_differs_from_arithmetic_mean(self):
+        geo = AnDE(n_dependence=1, mean="geometric").fit(X_MIXED, y_MIXED)
+        ari = AnDE(n_dependence=1).fit(X_MIXED, y_MIXED)
+        assert not np.allclose(geo.predict_proba(X_MIXED), ari.predict_proba(X_MIXED))
 
 
 # =============================================================================
-# ALR Tests (Accelerated Logistic Regression)
+# WeightedAnDE
 # =============================================================================
 
 
-class TestALR:
-    """Tests for ALR (Hybrid, Convex Optimization)."""
-
-    def test_alr_basic_fit_predict(self):
-        """Test that ALR can fit and predict without errors."""
-        model = ALR(n_dependence=1, n_bins=3, max_iter=10)
-        model.fit(X_MIXED, y_MIXED)
-
-        preds = model.predict(X_MIXED)
-        assert set(preds).issubset(set(y_MIXED))
-
-    def test_alr_learns_weights(self):
-        """Test that ALR learns non-trivial weights."""
-        model = ALR(n_dependence=1, max_iter=20)
-        model.fit(X_MIXED, y_MIXED)
-
-        assert hasattr(model, "learned_weights_")
-        assert len(model.learned_weights_) == model.n_weights_
-        # Weights should have been updated from initial ones (not all exactly 1)
-        # Note: with regularization, they may stay close to 1 but not identical
-        assert model.learned_weights_ is not None
-
-    def test_alr_weight_level_1(self):
-        """Test ALR with weight_level=1 (per-model weights)."""
-        model = ALR(n_dependence=1, weight_level=1, max_iter=10)
-        model.fit(X_MIXED, y_MIXED)
-
-        # With 3 features and n=1, expect 3 models -> 3 weights
-        assert model.n_weights_ == 3
-
-        proba = model.predict_proba(X_MIXED)
-        assert_allclose(proba.sum(axis=1), 1.0, rtol=1e-5)
-
-    def test_alr_weight_level_2(self):
-        """Test ALR with weight_level=2 (per-parent-value weights)."""
-        model = ALR(n_dependence=1, weight_level=2, n_bins=3, max_iter=10)
-        model.fit(X_MIXED, y_MIXED)
-
-        # Number of weights depends on binned parent values
-        assert model.n_weights_ > len(model.ensemble_)
-
-        proba = model.predict_proba(X_MIXED)
-        assert_allclose(proba.sum(axis=1), 1.0, rtol=1e-5)
-
-    def test_alr_weight_level_3(self):
-        """Test ALR with weight_level=3 (per-class weights)."""
-        model = ALR(n_dependence=1, weight_level=3, max_iter=10)
-        model.fit(X_MIXED, y_MIXED)
-
-        # 3 models * 2 classes = 6 weights
-        n_models = len(model.ensemble_)
-        n_classes = len(model.classes_)
-        assert model.n_weights_ == n_models * n_classes
-
-        proba = model.predict_proba(X_MIXED)
-        assert_allclose(proba.sum(axis=1), 1.0, rtol=1e-5)
-
-    def test_alr_weight_level_4(self):
-        """Test ALR with weight_level=4 (per-value-and-class weights)."""
-        model = ALR(n_dependence=1, weight_level=4, n_bins=2, max_iter=10)
-        model.fit(X_MIXED, y_MIXED)
-
-        # Most granular level: weights per (model, parent_value, class)
-        assert model.n_weights_ > len(model.ensemble_) * len(model.classes_)
-
-        proba = model.predict_proba(X_MIXED)
-        assert_allclose(proba.sum(axis=1), 1.0, rtol=1e-5)
-
-    def test_alr_n0(self):
-        """Test ALR with n=0 (Naive Bayes structure with learned weights)."""
-        model = ALR(n_dependence=0, max_iter=10)
-        model.fit(X_MIXED, y_MIXED)
-
-        # n=0 means 1 model
-        assert len(model.ensemble_) == 1
-
-        preds = model.predict(X_MIXED)
-        assert len(preds) == len(y_MIXED)
-
-    def test_alr_n2(self):
-        """Test ALR with n=2 (A2DE structure with learned weights)."""
-        model = ALR(n_dependence=2, max_iter=10)
-        model.fit(X_MIXED, y_MIXED)
-
-        # 3 features, n=2 -> C(3,2) = 3 models
-        assert len(model.ensemble_) == 3
-
-        preds = model.predict(X_MIXED)
-        assert set(preds).issubset(set(y_MIXED))
-
-    def test_alr_regularization_effect(self):
-        """Test that L2 regularization affects the weights."""
-        model_low_reg = ALR(n_dependence=1, l2_reg=1e-6, max_iter=50)
-        model_high_reg = ALR(n_dependence=1, l2_reg=1.0, max_iter=50)
-
-        model_low_reg.fit(X_MIXED, y_MIXED)
-        model_high_reg.fit(X_MIXED, y_MIXED)
-
-        # High regularization should push weights closer to 1.0
-        low_reg_deviation = np.mean(np.abs(model_low_reg.learned_weights_ - 1.0))
-        high_reg_deviation = np.mean(np.abs(model_high_reg.learned_weights_ - 1.0))
-
-        # With much higher regularization, deviation from 1.0 should be smaller
-        assert high_reg_deviation <= low_reg_deviation + 1e-2
-
-    def test_alr_modular_optimization(self):
-        """Test ALR with modular optimization (optimizing each SPODE independently)."""
-        model = ALR(n_dependence=1, modular=True, max_iter=10)
-        model.fit(X_MIXED, y_MIXED)
-
-        assert hasattr(model, "learned_weights_")
-        assert len(model.learned_weights_) == model.n_weights_
-        proba = model.predict_proba(X_MIXED)
-        assert_allclose(proba.sum(axis=1), 1.0, rtol=1e-5)
-
-    def test_alr_modular_weight_level_4(self):
-        """Test ALR modular optimization with weight_level=4."""
-        model = ALR(n_dependence=1, modular=True, weight_level=4, n_bins=2, max_iter=10)
-        model.fit(X_MIXED, y_MIXED)
-
-        assert hasattr(model, "learned_weights_")
-        proba = model.predict_proba(X_MIXED)
-        assert_allclose(proba.sum(axis=1), 1.0, rtol=1e-5)
-
-
-# =============================================================================
-# WeightedAnDE Tests (Hybrid Arithmetic Mean)
-# =============================================================================
-
-
+@pytest.mark.parametrize("mean", ["arithmetic", "geometric"])
+@pytest.mark.parametrize("scope", ["component", "factor"])
 class TestWeightedAnDE:
-    """Tests for WeightedAnDE (Hybrid, Non-Convex Optimization)."""
+    """Tests for WeightedAnDE across poolings and weight scopes."""
 
-    def test_weighted_ande_basic_fit_predict(self):
-        """Test that WeightedAnDE can fit and predict without errors."""
-        model = WeightedAnDE(n_dependence=1, n_bins=3, max_iter=10)
-        model.fit(X_MIXED, y_MIXED)
+    @pytest.mark.parametrize("level", [1, 2, 3, 4])
+    def test_levels_fit_and_predict(self, mean, scope, level):
+        model = WeightedAnDE(
+            n_dependence=1,
+            mean=mean,
+            weight_scope=scope,
+            weight_level=level,
+            n_bins=2,
+            max_iter=10,
+        ).fit(X_MIXED, y_MIXED)
+        assert model.learned_weights_.shape == (model.n_weights_,)
+        assert_allclose(model.predict_proba(X_MIXED).sum(axis=1), 1.0, rtol=1e-5)
 
-        preds = model.predict(X_MIXED)
-        assert set(preds).issubset(set(y_MIXED))
+    @pytest.mark.parametrize("n_dependence", [0, 2])
+    def test_other_orders(self, mean, scope, n_dependence):
+        model = WeightedAnDE(
+            n_dependence=n_dependence, mean=mean, weight_scope=scope, max_iter=10
+        ).fit(X_MIXED, y_MIXED)
+        assert len(model.ensemble_) == (1 if n_dependence == 0 else 3)
+        assert set(model.predict(X_MIXED)) <= set(y_MIXED)
 
-    def test_weighted_ande_learns_weights(self):
-        """Test that WeightedAnDE learns weights."""
-        model = WeightedAnDE(n_dependence=1, max_iter=20)
-        model.fit(X_MIXED, y_MIXED)
+    def test_regularization_pulls_weights_towards_one(self, mean, scope):
+        def deviation(l2_reg):
+            model = WeightedAnDE(
+                n_dependence=1,
+                mean=mean,
+                weight_scope=scope,
+                weight_level=3,
+                l2_reg=l2_reg,
+                max_iter=50,
+            ).fit(X_MIXED, y_MIXED)
+            return np.abs(model.learned_weights_ - 1.0).mean()
 
-        assert hasattr(model, "learned_weights_")
-        assert len(model.learned_weights_) == model.n_weights_
+        assert deviation(10.0) <= deviation(1e-6) + 1e-2
 
-    def test_weighted_ande_weight_level_1(self):
-        """Test WeightedAnDE with weight_level=1."""
-        model = WeightedAnDE(n_dependence=1, weight_level=1, max_iter=10)
-        model.fit(X_MIXED, y_MIXED)
+    def test_modular_optimization(self, mean, scope):
+        model = WeightedAnDE(
+            n_dependence=1,
+            mean=mean,
+            weight_scope=scope,
+            weight_level=4,
+            modular=True,
+            n_bins=2,
+            max_iter=10,
+        ).fit(X_MIXED, y_MIXED)
+        assert_allclose(model.predict_proba(X_MIXED).sum(axis=1), 1.0, rtol=1e-5)
 
-        proba = model.predict_proba(X_MIXED)
-        assert_allclose(proba.sum(axis=1), 1.0, rtol=1e-5)
 
-    def test_weighted_ande_weight_level_2(self):
-        """Test WeightedAnDE with weight_level=2."""
-        model = WeightedAnDE(n_dependence=1, weight_level=2, max_iter=10)
-        model.fit(X_MIXED, y_MIXED)
-
-        proba = model.predict_proba(X_MIXED)
-        assert_allclose(proba.sum(axis=1), 1.0, rtol=1e-5)
-
-    def test_weighted_ande_weight_level_3(self):
-        """Test WeightedAnDE with weight_level=3."""
-        model = WeightedAnDE(n_dependence=1, weight_level=3, max_iter=10)
-        model.fit(X_MIXED, y_MIXED)
-
-        proba = model.predict_proba(X_MIXED)
-        assert_allclose(proba.sum(axis=1), 1.0, rtol=1e-5)
-
-    def test_weighted_ande_weight_level_4(self):
-        """Test WeightedAnDE with weight_level=4."""
-        model = WeightedAnDE(n_dependence=1, weight_level=4, n_bins=2, max_iter=10)
-        model.fit(X_MIXED, y_MIXED)
-
-        proba = model.predict_proba(X_MIXED)
-        assert_allclose(proba.sum(axis=1), 1.0, rtol=1e-5)
-
-    def test_weighted_ande_n2(self):
-        """Test WeightedAnDE with n=2."""
-        model = WeightedAnDE(n_dependence=2, max_iter=10)
-        model.fit(X_MIXED, y_MIXED)
-
-        assert len(model.ensemble_) == 3
-        preds = model.predict(X_MIXED)
-        assert len(preds) == len(y_MIXED)
-
-    def test_weighted_ande_modular_optimization(self):
-        """Test WeightedAnDE with modular optimization."""
-        model = WeightedAnDE(n_dependence=1, modular=True, max_iter=10)
-        model.fit(X_MIXED, y_MIXED)
-
-        assert hasattr(model, "learned_weights_")
-        assert len(model.learned_weights_) == model.n_weights_
-        proba = model.predict_proba(X_MIXED)
-        assert_allclose(proba.sum(axis=1), 1.0, rtol=1e-5)
+def test_geometric_component_weights_are_non_negative():
+    model = WeightedAnDE(
+        n_dependence=1, mean="geometric", weight_level=3, l2_reg=0.0, max_iter=200
+    ).fit(X_MIXED, y_MIXED)
+    assert np.all(model.learned_weights_ >= 0)
 
 
 # =============================================================================
@@ -332,19 +150,17 @@ class TestWeightedAnDE:
 class TestEdgeCases:
     """Tests for edge cases and robustness."""
 
-    def test_single_feature(self):
-        """Test models with a single feature."""
+    @pytest.mark.parametrize("name", MODELS)
+    def test_single_feature(self, name):
         X = np.array([[1.0], [2.0], [1.5], [2.5], [1.2], [2.2]])
         y = np.array([0, 1, 0, 1, 0, 1])
+        model = MODELS[name]()
+        if "n_dependence" in model.get_params():
+            model.set_params(n_dependence=0)
+        assert len(model.fit(X, y).predict(X)) == len(y)
 
-        for cls in [AnDE, AnJE, ALR, WeightedAnDE]:
-            model = cls(n_dependence=0)  # n must be 0 for 1 feature with n=0
-            model.fit(X, y)
-            preds = model.predict(X)
-            assert len(preds) == len(y)
-
-    def test_many_classes(self):
-        """Test models with more than 2 classes."""
+    @pytest.mark.parametrize("name", MODELS)
+    def test_many_classes(self, name):
         X, y = make_classification(
             n_samples=100,
             n_features=5,
@@ -353,37 +169,16 @@ class TestEdgeCases:
             n_clusters_per_class=1,
             random_state=42,
         )
-        y = y.astype(int)
+        model = MODELS[name]().set_params(n_bins=3).fit(X, y)
+        proba = model.predict_proba(X)
+        assert proba.shape == (100, 4)
+        assert_allclose(proba.sum(axis=1), 1.0, rtol=1e-5)
 
-        for cls in [AnDE, AnJE]:
-            model = cls(n_dependence=1, n_bins=3)
-            model.fit(X, y)
-
-            proba = model.predict_proba(X)
-            assert proba.shape == (100, 4)
-            assert_allclose(proba.sum(axis=1), 1.0, rtol=1e-5)
-
-        for cls in [ALR, WeightedAnDE]:
-            model = cls(n_dependence=1, n_bins=3, max_iter=10)
-            model.fit(X, y)
-
-            proba = model.predict_proba(X)
-            assert proba.shape == (100, 4)
-            assert_allclose(proba.sum(axis=1), 1.0, rtol=1e-5)
-
-    def test_binary_features(self):
-        """Test models with only binary features."""
+    @pytest.mark.parametrize("name", MODELS)
+    def test_binary_features(self, name):
         X = np.array([[0, 0], [0, 1], [1, 0], [1, 1]] * 5)
         y = np.array([0, 1, 1, 0] * 5)
-
-        for cls in [AnDE, AnJE, ALR, WeightedAnDE]:
-            if cls in [ALR, WeightedAnDE]:
-                model = cls(n_dependence=1, max_iter=10)
-            else:
-                model = cls(n_dependence=1)
-            model.fit(X, y)
-            preds = model.predict(X)
-            assert len(preds) == len(y)
+        assert len(MODELS[name]().fit(X, y).predict(X)) == len(y)
 
     def test_discretization_strategies(self):
         """Test different discretization strategies."""
@@ -452,47 +247,15 @@ class TestEdgeCases:
 class TestParallelExecution:
     """Tests for parallel execution with n_jobs."""
 
-    def test_ande_parallel(self):
-        """Test AnDE with parallel execution."""
-        model_serial = AnDE(n_dependence=1, n_jobs=1)
-        model_parallel = AnDE(n_dependence=1, n_jobs=2)
-
-        model_serial.fit(X_MIXED, y_MIXED)
-        model_parallel.fit(X_MIXED, y_MIXED)
-
-        preds_serial = model_serial.predict(X_MIXED)
-        preds_parallel = model_parallel.predict(X_MIXED)
-
-        assert_array_equal(preds_serial, preds_parallel)
+    @pytest.mark.parametrize("cls", [AnDE, WeightedAnDE])
+    def test_parallel_matches_serial(self, cls):
+        serial = cls(n_dependence=1, n_jobs=1).fit(X_MIXED, y_MIXED)
+        parallel = cls(n_dependence=1, n_jobs=2).fit(X_MIXED, y_MIXED)
+        assert_allclose(serial.predict_proba(X_MIXED), parallel.predict_proba(X_MIXED))
 
     def test_ande_parallel_all_cores(self):
-        """Test AnDE with n_jobs=-1 (all cores)."""
-        model = AnDE(n_dependence=1, n_jobs=-1)
-        model.fit(X_MIXED, y_MIXED)
-
-        preds = model.predict(X_MIXED)
-        assert len(preds) == len(y_MIXED)
-
-    def test_anje_parallel(self):
-        """Test AnJE with parallel execution."""
-        model_serial = AnJE(n_dependence=1, n_jobs=1)
-        model_parallel = AnJE(n_dependence=1, n_jobs=-1)
-
-        model_serial.fit(X_MIXED, y_MIXED)
-        model_parallel.fit(X_MIXED, y_MIXED)
-
-        preds_serial = model_serial.predict(X_MIXED)
-        preds_parallel = model_parallel.predict(X_MIXED)
-
-        assert_array_equal(preds_serial, preds_parallel)
-
-    def test_alr_parallel(self):
-        """Test ALR with parallel execution."""
-        model = ALR(n_dependence=1, n_jobs=-1, max_iter=10)
-        model.fit(X_MIXED, y_MIXED)
-
-        preds = model.predict(X_MIXED)
-        assert len(preds) == len(y_MIXED)
+        model = AnDE(n_dependence=1, n_jobs=-1).fit(X_MIXED, y_MIXED)
+        assert len(model.predict(X_MIXED)) == len(y_MIXED)
 
 
 # =============================================================================
@@ -500,53 +263,22 @@ class TestParallelExecution:
 # =============================================================================
 
 
+@pytest.mark.parametrize("name", MODELS)
 class TestAPIConsistency:
     """Tests for scikit-learn API consistency."""
 
-    @pytest.mark.parametrize("cls", [AnDE, AnJE, ALR, WeightedAnDE])
-    def test_classes_attribute(self, cls):
-        """Test that classes_ attribute is set correctly."""
-        if cls in [ALR, WeightedAnDE]:
-            model = cls(n_dependence=1, max_iter=10)
-        else:
-            model = cls(n_dependence=1)
-        model.fit(X_MIXED, y_MIXED)
-
-        assert hasattr(model, "classes_")
-        assert_array_equal(model.classes_, np.array([0, 1]))
-
-    @pytest.mark.parametrize("cls", [AnDE, AnJE, ALR, WeightedAnDE])
-    def test_n_features_in_attribute(self, cls):
-        """Test that n_features_in_ attribute is set correctly."""
-        if cls in [ALR, WeightedAnDE]:
-            model = cls(n_dependence=1, max_iter=10)
-        else:
-            model = cls(n_dependence=1)
-        model.fit(X_MIXED, y_MIXED)
-
-        assert hasattr(model, "n_features_in_")
+    def test_fitted_attributes(self, name):
+        model = MODELS[name]().fit(X_MIXED, y_MIXED)
+        assert_array_equal(model.classes_, [0, 1])
         assert model.n_features_in_ == 3
 
-    @pytest.mark.parametrize("cls", [AnDE, AnJE, ALR, WeightedAnDE])
-    def test_predict_proba_shape(self, cls):
-        """Test that predict_proba returns correct shape."""
-        if cls in [ALR, WeightedAnDE]:
-            model = cls(n_dependence=1, max_iter=10)
-        else:
-            model = cls(n_dependence=1)
-        model.fit(X_MIXED, y_MIXED)
+    def test_prediction_shapes(self, name):
+        model = MODELS[name]().fit(X_MIXED, y_MIXED)
+        assert model.predict_proba(X_MIXED).shape == (len(X_MIXED), 2)
+        assert model.predict(X_MIXED).shape == (len(X_MIXED),)
 
-        proba = model.predict_proba(X_MIXED)
-        assert proba.shape == (len(X_MIXED), 2)
-
-    @pytest.mark.parametrize("cls", [AnDE, AnJE, ALR, WeightedAnDE])
-    def test_predict_shape(self, cls):
-        """Test that predict returns correct shape."""
-        if cls in [ALR, WeightedAnDE]:
-            model = cls(n_dependence=1, max_iter=10)
-        else:
-            model = cls(n_dependence=1)
-        model.fit(X_MIXED, y_MIXED)
-
-        preds = model.predict(X_MIXED)
-        assert preds.shape == (len(X_MIXED),)
+    def test_log_proba_is_consistent_with_proba(self, name):
+        model = MODELS[name]().fit(X_MIXED, y_MIXED)
+        assert_allclose(
+            np.exp(model.predict_log_proba(X_MIXED)), model.predict_proba(X_MIXED)
+        )

@@ -13,9 +13,9 @@ The primary goal of this package is to provide robust, `scikit-learn`-compatible
 ## Key Features
 
 - **MixedNB**: Naive Bayes for mixed data types (Gaussian + Categorical + Bernoulli) in a single model
-- **AnDE**: Averaged n-Dependence Estimators (AODE, A2DE) that relax the independence assumption
-- **ALR**: Accelerated Logistic Regression - hybrid generative-discriminative models with 4 weight granularity levels
-- **WeightedAnDE**: Discriminatively-weighted ensemble models
+- **AnDE**: Averaged n-Dependence Estimators (AODE, A2DE) that relax the independence assumption, pooled with the arithmetic or the geometric mean
+- **WeightedAnDE**: AnDE with discriminative weights, one per component or one per factor of each component (weighted CCBN), at four levels of granularity, fitted jointly or one component at a time (the AnDE<sup>w</sup> of FedAnDE)
+- **AnJE and ALR**: Averaged n-Join Estimators and Accelerated Logistic Regression, as defined by Zaidi et al. (2016), with the training protocol of the paper by default
 - **Full scikit-learn API**: Compatible with pipelines, cross-validation, and grid search
 
 ## Quick Start
@@ -94,7 +94,8 @@ If you use scikit-bayes in a scientific publication, please cite:
 
 - Webb, G. I., Boughton, J., & Wang, Z. (2005). *Not so naive Bayes: Aggregating one-dependence estimators*. Machine Learning, 58(1), 5-24.
 - Flores, M. J., Gámez, J. A., Martínez, A. M., & Puerta, J. M. (2009). *GAODE and HAODE: Two proposals based on AODE to deal with continuous variables*. ICML '09, 313-320.
-- Zaidi, N. A., Webb, G. I., Carman, M. J., & Petitjean, F. (2017). *Efficient parameter learning of Bayesian network classifiers*. Machine Learning, 106(9-10), 1289-1329.
+- Zaidi, N. A., Webb, G. I., Carman, M. J., Petitjean, F., & Cerquides, J. (2016). *ALR^n: Accelerated higher-order logistic regression*. Machine Learning, 104(2-3), 151-194.
+- Zaidi, N. A., Webb, G. I., Carman, M. J., Petitjean, F., Buntine, W., Hynes, M., & De Sterck, H. (2017). *Efficient parameter learning of Bayesian network classifiers*. Machine Learning, 106(9-10), 1289-1329.
 
 ## License
 

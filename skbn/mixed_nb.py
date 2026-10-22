@@ -381,41 +381,50 @@ class MixedNB(ClassifierMixin, BaseEstimator):
             return None
         return (X_cat.max(axis=0) + 1).astype(int, copy=False)
 
-    def _feature_log_likelihood(self, X):
+    def _feature_log_likelihood(self, X, class_idx=None):
         """Per-feature class-conditional log-likelihoods.
+
+        ``class_idx`` of shape (n_samples, k) restricts the evaluation of each
+        sample to ``k`` classes (indices into ``classes_``); by default every
+        class is evaluated.
 
         Returns
         -------
-        ndarray of shape (n_samples, n_classes, n_features)
-            Entry ``[i, c, j]`` is ``log P(x_ij | c)``. Features ignored at fit
-            time (constant) contribute zeros. The class prior is not included.
+        ndarray of shape (n_samples, k, n_features)
+            Entry ``[i, c, j]`` is ``log P(x_ij | class_idx[i, c])``. Features
+            ignored at fit time (constant) contribute zeros. The class prior is
+            not included.
         """
         check_is_fitted(self, attributes=["classes_", "estimators_"])
         X = validate_data(self, X, reset=False)
-        out = np.zeros((X.shape[0], len(self.classes_), self.n_features_in_))
+        n_samples = X.shape[0]
+        if class_idx is None:
+            class_idx = np.broadcast_to(
+                np.arange(len(self.classes_)), (n_samples, len(self.classes_))
+            )
+        out = np.zeros((n_samples, class_idx.shape[1], self.n_features_in_))
+        rows = np.arange(n_samples)[:, np.newaxis]
 
         if "gaussian" in self.estimators_:
             indices = self.feature_types_["gaussian"]
             est = self.estimators_["gaussian"]
-            diff = X[:, np.newaxis, indices] - est.theta_
-            out[:, :, indices] = -0.5 * (
-                diff**2 / est.var_ + np.log(2.0 * np.pi * est.var_)
-            )
+            var = est.var_[class_idx]
+            diff = X[:, np.newaxis, indices] - est.theta_[class_idx]
+            out[:, :, indices] = -0.5 * (diff**2 / var + np.log(2.0 * np.pi * var))
 
         if "categorical" in self.estimators_:
             indices = self.feature_types_["categorical"]
             est = self.estimators_["categorical"]
             X_cat = np.clip(X[:, indices].astype(int), 0, self._cat_cardinalities - 1)
             for i, j in enumerate(indices):
-                out[:, :, j] = est.feature_log_prob_[i][:, X_cat[:, i]].T
+                out[:, :, j] = est.feature_log_prob_[i][class_idx, X_cat[rows, i]]
 
         if "bernoulli" in self.estimators_:
             indices = self.feature_types_["bernoulli"]
             est = self.estimators_["bernoulli"]
             X_bern = (X[:, indices] > 0)[:, np.newaxis, :]
-            log_p = est.feature_log_prob_[np.newaxis]
-            log_q = np.log1p(-np.exp(log_p))
-            out[:, :, indices] = np.where(X_bern, log_p, log_q)
+            log_p = est.feature_log_prob_[class_idx]
+            out[:, :, indices] = np.where(X_bern, log_p, np.log1p(-np.exp(log_p)))
 
         return np.nan_to_num(out, nan=-1e10, neginf=-1e10)
 

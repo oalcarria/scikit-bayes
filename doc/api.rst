@@ -25,16 +25,26 @@ Mixed Naive Bayes
 AnDE Family
 -----------
 
-Averaged n-Dependence Estimators and related classifiers.
+Averaged n-Dependence Estimators and their discriminative weighting.
 
 .. autosummary::
    :toctree: generated/
    :template: class.rst
 
    AnDE
+   WeightedAnDE
+
+AnJE Family
+-----------
+
+Averaged n-Join Estimators and Accelerated Logistic Regression.
+
+.. autosummary::
+   :toctree: generated/
+   :template: class.rst
+
    AnJE
    ALR
-   WeightedAnDE
 
 
 Utilities
